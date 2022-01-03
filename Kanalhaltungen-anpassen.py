@@ -10,7 +10,7 @@
 #
 # Für aktuelle Verwendung zu nutzende Parameter in ArcGis:
 # Haltungen:        haltungen_neustadt.shp      Ursprungsdaten.
-# Anschlüsse:       anschluss.shp               Ursprungsdaten.
+# Anschlüsse:       anschlussleitung.shp               Ursprungsdaten.
 # Schächte:         schacht_adjust_3d_z.shp     Das manuell angepasste Feature der Schachtsohlen.
 # Ausgabeordner:    <user-defined>              Sollte ein leerer Ordner sein. (Erzeugt viele Dateien)
 #
@@ -104,7 +104,7 @@ def convertFeatureToPoints(featureClass):
     updateProgress("Konvertiere Vertices zu Punkten in {0}...".format(feature))
     createPath = output_path + "\\" + featureName + "_toPoints" # Use featureName to write new feature
     arcpy.FeatureVerticesToPoints_management(feature, createPath, "ALL")
-    arcpy.AddMessage("{0} erfolgreich von {1} zu Point konvertiert.".format(feature, oldType))
+    # arcpy.AddMessage("{0} erfolgreich von {1} zu Point konvertiert.".format(feature, oldType))
 
     # Calculate Geometry Attributes
     feature = featureName + "_toPoints.shp" # From now on, work with converted feature
@@ -203,7 +203,8 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
                     break;
 
         if not startPoint or not endPoint:
-            arcpy.AddMessage("Warnung: Start- oder Endpunkt in Haltung von Punkt {0} nicht gefunden.".format(cIndex))
+            if showWarnings:
+                arcpy.AddMessage("Warnung: Start- oder Endpunkt in Haltung von Punkt {0} nicht gefunden.".format(cIndex))
             row[zIndex] = 0
             cIndex += 1
             continue
@@ -219,7 +220,8 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
                     break
 
         if not startRef or not endRef:
-            arcpy.AddMessage("Warnung: Start- oder Endpunkt in Referenz von Punkt {0} nicht gefunden.".format(cIndex))
+            if showWarnings:
+                arcpy.AddMessage("Warnung: Start- oder Endpunkt in Referenz von Punkt {0} nicht gefunden.".format(cIndex))
             row[zIndex] = 0
             cIndex += 1
             continue
@@ -260,12 +262,14 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
 
     # -------------------------------------------------------------------------------------#
 
-def adjust3DZbyReference(featureA, matchA, featureB, matchB):
+def adjust3DZbyReference(featureA, matchA, groupA, featureB, matchB):
     """Takes Z values from featureB and transfers them to featureA where matchA = matchB.
     Assumes the input feature contains 3D points.
+    Group parameter is currently ignored.
 
     :param string featureA: The feature class to adjust.
-    :param string matchA: The name of the field in featureClass to match against matchB in featureB
+    :param string matchA: The name of the field in featureClass to match against matchB in featureB.
+    :param string groupA: The field to group featureA by.
     :param string featureB: The feature class to reference.
     :param string matchB: The name of the field to be matched against with matchA.
     :returns: void
@@ -286,9 +290,11 @@ def adjust3DZbyReference(featureA, matchA, featureB, matchB):
     BmatchIndex = Bfields.index(matchB)
     AzIndex = Afields.index("POINT_Z")
     BzIndex = Bfields.index("POINT_Z")
+    AgroupIndex = Afields.index(groupA)
 
     # Fetch cursor into array to minize cursor usage
-    Arows = [row for row in arcpy.da.UpdateCursor(featureA, "*")]
+    Arows = [row for row in arcpy.da.UpdateCursor(featureA, "*", sql_clause=(
+        None, "ORDER BY {0}".format(groupA)))]
     Brows = [row for row in arcpy.da.SearchCursor(featureB, "*")]
     ArowCount = len(Arows)
 
@@ -301,6 +307,8 @@ def adjust3DZbyReference(featureA, matchA, featureB, matchB):
         updateProgress("Verarbeite Punkt {0}/{1}...".format(cIndex, ArowCount))
         idFound = False
         searchID = Arow[AmatchIndex]
+
+        # Search for matching reference points
         for Brow in Brows:
             if searchID == Brow[BmatchIndex]:
                 # Copy the adjustment (NOT the absolute) Z value
@@ -312,6 +320,7 @@ def adjust3DZbyReference(featureA, matchA, featureB, matchB):
 
         if not idFound:
             Arow[AzIndex] = 0
+
         cIndex += 1
 
     updateProgress("Schreibe {0} angepasste Punkte in Feature {1}...".format(adjustedPoints, featureA))
@@ -350,6 +359,7 @@ with Timer("Setup") as timer:
     anschluss_path = arcpy.GetParameterAsText(1)
     schacht_path = arcpy.GetParameterAsText(2)
     output_path = arcpy.GetParameterAsText(3)
+    showWarnings = arcpy.GetParameter(4)
 
     # Change workspace to output folder
     os.chdir(output_path)
@@ -376,7 +386,7 @@ with Timer("Zu Punkte konvertieren") as timer:
 with Timer("3D Daten anpassen (Teil 1)") as timer:
     interpolateFeatureZ("haltungen_out_toPoints", "ORIG_FID", schacht_out, "schacht_X", "schacht_Y", "schacht_XY")
 with Timer("3D Daten anpassen (Teil 2)") as timer:
-    adjust3DZbyReference("anschluss_out_toPoints", "a_XY", "haltungen_out_toPoints", "h_XY")
+    adjust3DZbyReference("anschluss_out_toPoints", "a_XY", "ORIG_FID", "haltungen_out_toPoints", "h_XY")
 
 with Timer("Zu Linien konvertieren") as timer:
     updateProgress("Wandle anschluss_out_toPoints in Linien um...")
