@@ -20,6 +20,7 @@
 import os
 import math
 import time
+import copy
 
 import arcpy
 from arcpy import env
@@ -294,41 +295,56 @@ def adjust3DZbyReference(featureA, matchA, groupA, featureB, matchB):
 
     # Fetch cursor into array to minize cursor usage
     Arows = [row for row in arcpy.da.UpdateCursor(featureA, "*", sql_clause=(
-        None, "ORDER BY {0}".format(groupA)))]
+        None, "ORDER BY {0}, {1} DESC".format(groupA, "FID")))]
     Brows = [row for row in arcpy.da.SearchCursor(featureB, "*")]
     ArowCount = len(Arows)
 
     # Util variables
     cIndex = 0
     adjustedPoints = 0
+    processGroups = True # Should create a 2D plane of points per line
 
     updateProgress("Suche nach übereinstimmenden IDs von {0}...".format(featureA))
+    OArows = copy.deepcopy(Arows) # Fastest method to deepcopy array according to https://stackoverflow.com/a/2612990/13756552
+    for Arow in Arows:
+        # Set to 0 as default, does not change position
+        Arow[AzIndex] = 0
+
     for Arow in Arows:
         updateProgress("Verarbeite Punkt {0}/{1}...".format(cIndex, ArowCount))
-        idFound = False
-        searchID = Arow[AmatchIndex]
 
-        # Search for matching reference points
-        for Brow in Brows:
-            if searchID == Brow[BmatchIndex]:
-                # Copy the adjustment (NOT the absolute) Z value
-                Arow[AzIndex] = Brow[BzIndex]
-                adjustedPoints += 1
-                idFound = True
-            if idFound:
-                break
+        # Only search for match if point isn't adjusted already
+        if Arow[AzIndex] == 0:
+            # Search for matching reference points
+            searchID = Arow[AmatchIndex]
+            for Brow in Brows:
+                if searchID == Brow[BmatchIndex]:
+                    # Copy the adjustment (NOT the absolute) Z value
+                    Arow[AzIndex] = Brow[BzIndex] - OArows[cIndex][AzIndex]
+                    adjustedPoints += 1
+                    rIndex = 0
+                    for Arow2 in Arows:
+                        if Arows[rIndex][AgroupIndex] == Arow[AgroupIndex] and not rIndex == cIndex:
+                            adjustedPoints += 1
+                            Arows[rIndex][AzIndex] = Brow[BzIndex] - OArows[rIndex][AzIndex]
 
-        if not idFound:
-            Arow[AzIndex] = 0
+                        rIndex += 1
+
+                    break
 
         cIndex += 1
 
     updateProgress("Schreibe {0} angepasste Punkte in Feature {1}...".format(adjustedPoints, featureA))
     rIndex = 0
-    with arcpy.da.UpdateCursor(featureA, Afields) as Aupdate:
+    with arcpy.da.UpdateCursor(featureA, Afields, sql_clause=(
+        None, "ORDER BY {0}, {1} DESC".format(groupA, "FID"))) as Aupdate:
         for AupRow in Aupdate:
-            AupRow[AzIndex] = Arows[rIndex][AzIndex]
-            Aupdate.updateRow(AupRow)
+            if Arows[rIndex][AzIndex] == 0:
+                Aupdate.deleteRow()
+            else:
+                AupRow[AzIndex] = Arows[rIndex][AzIndex]
+                Aupdate.updateRow(AupRow)
+
             rIndex += 1
 
     updateProgress("Passe Geometrie von {0} auf Tabellenwerte an...".format(featureA))
