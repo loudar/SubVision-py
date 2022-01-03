@@ -2,8 +2,8 @@
 Python scripts for SubVision project.
 
 # How to set up:
-- Copy the SubVision.tbx to your ArcGIS toolbox folder.
-- Right click "Kanalhaltungen-anpassen" -> "Properties" -> "Source" and make sure the script from the repository if referenced. If not, select the "Kanalhaltungen-anpassen.py" script.
+- Copy **SubVision.tbx** to your ArcGIS toolbox folder.
+- Right click "Kanalhaltungen-anpassen" -> "Properties" -> "Source" and make sure the script from the repository if referenced. If not, select the **"Kanalhaltungen-anpassen.py"** script.
 - Close dialogue.
 
 # How to use:
