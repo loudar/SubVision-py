@@ -129,6 +129,35 @@ def convertFeatureToPoints(featureClass):
     updateProgress("{0} erfolgreich berechnet.".format(feature))
     #-------------------------------------------------------------------------------------#
 
+def recalculate3DPointCoordinates(feature):
+    """Deletes previous POINT_* coordinates and creates new ones.
+
+    :param string feature: The feature class to work with.
+    :return:
+    """
+    if feature[-4:] != ".shp":
+        feature += ".shp"
+
+    # Delete previous ones if they exist
+    fields = [f.name for f in arcpy.ListFields(feature)]
+    if "POINT_X" in fields:
+        if showWarnings:
+            arcpy.AddMessage("Warnung: Entferne Feld POINT_X, um es neu zu schreiben...")
+        arcpy.DeleteField_management(feature, "POINT_X")
+    if "POINT_Y" in fields:
+        if showWarnings:
+            arcpy.AddMessage("Warnung: Entferne Feld POINT_Y, um es neu zu schreiben...")
+        arcpy.DeleteField_management(feature, "POINT_Y")
+    if "POINT_Z" in fields:
+        if showWarnings:
+            arcpy.AddMessage("Warnung: Entferne Feld POINT_Z, um es neu zu schreiben...")
+        arcpy.DeleteField_management(feature, "POINT_Z")
+
+    # Calculate new coordinates
+    updateProgress("Berechne Punkt-Koordinaten in {0}...".format(feature))
+    arcpy.AddGeometryAttributes_management(feature, "POINT_X_Y_Z_M")
+    arcpy.DeleteField_management(feature, "POINT_M")  # Delete, is never used
+
 def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, refFieldY, refFieldID):
     """Interpolates the Z value of a point feature based on a reference feature. Usage: Adjust a point on a line between to other points.
 
@@ -140,7 +169,6 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
     :param string refFieldID: The name of the field to be matched against with matchFieldID.
     :returns: void
     """
-
     if featureClass[-4:] != ".shp":
         featureClass += ".shp"
 
@@ -401,8 +429,10 @@ with Timer("Zu Punkte konvertieren") as timer:
 # Update base line vertices Z values
 with Timer("3D Daten anpassen (Teil 1)") as timer:
     interpolateFeatureZ("haltungen_out_toPoints", "ORIG_FID", schacht_out, "schacht_X", "schacht_Y", "schacht_XY")
+    recalculate3DPointCoordinates("haltungen_out_toPoints")
 with Timer("3D Daten anpassen (Teil 2)") as timer:
     adjust3DZbyReference("anschluss_out_toPoints", "a_XY", "ORIG_FID", "haltungen_out_toPoints", "h_XY")
+    # recalculate3DPointCoordinates("anschluss_out_toPoints")
 
 with Timer("Zu Linien konvertieren") as timer:
     updateProgress("Wandle anschluss_out_toPoints in Linien um...")
