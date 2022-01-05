@@ -207,6 +207,8 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
     refRows = [row for row in arcpy.da.SearchCursor(referenceClass, "*")]
     rowCount = len(rows)
 
+    pointInfo = [] # Stores [lengthToStart, baseLength, difToOriginal]
+
     for row in rows:
         if saved_fid == row[matchFieldIndex]:
             continueLine = True
@@ -234,6 +236,7 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
         if not startPoint or not endPoint:
             if showWarnings:
                 arcpy.AddMessage("Warnung: Start- oder Endpunkt in Haltung von Punkt {0} nicht gefunden.".format(cIndex))
+            pointInfo.insert(cIndex, [0, 0, 0, saved_fid, row[zIndex]])
             row[zIndex] = 0
             cIndex += 1
             continue
@@ -251,16 +254,18 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
         if not startRef or not endRef:
             if showWarnings:
                 arcpy.AddMessage("Warnung: Start- oder Endpunkt in Referenz von Punkt {0} nicht gefunden.".format(cIndex))
+            pointInfo.insert(cIndex, [0, 0, 0, saved_fid, row[zIndex]])
             row[zIndex] = 0
             cIndex += 1
             continue
 
         updateProgress("Verarbeite Punkt {0}/{1}... (Berechnung)".format(cIndex, rowCount))
 
-        # Calculate base values
-        xLength = startRef[refIndexX] - endRef[refIndexX]
-        yLength = startRef[refIndexY] - endRef[refIndexY]
-        baseLength = (xLength ** 2) + (yLength ** 2)
+        if not continueLine:
+            # Calculate base values
+            xLength = startRef[refIndexX] - endRef[refIndexX]
+            yLength = startRef[refIndexY] - endRef[refIndexY]
+            baseLength = (xLength ** 2) + (yLength ** 2)
 
         # Calculate distance from start and end point
         xLength = row[xIndex] - startRef[refIndexX]
@@ -271,11 +276,59 @@ def interpolateFeatureZ(featureClass, matchFieldID, referenceClass, refFieldX, r
         startZ = startRef[refIndexZ]
         endZ = endRef[refIndexZ]
         zDif = startZ - endZ  # Can be negative and should be able to
-        newZ = startZ - (math.sqrt((toStartLength / baseLength)) * zDif)  # Calculate new Z coord based on distance to start point
-        row[zIndex] = newZ - row[zIndex]
+        distanceFactor = math.sqrt((toStartLength / baseLength))
+        newZ = startZ - (distanceFactor * zDif)  # Calculate new Z coord based on distance to start point
+
+        difToOriginal = newZ - row[zIndex]
+        if difToOriginal <= .2:
+            difToOriginal = 0 # Prevents pulling lines downwards + keeps already specific data in shape
+
+        pointInfo.insert(cIndex, [math.sqrt(toStartLength), math.sqrt(baseLength), difToOriginal, saved_fid, row[zIndex]])
+        row[zIndex] = difToOriginal
         adjustedPoints += 1
 
         cIndex += 1
+
+    if subInterpolate:
+        # Interpolation within lines, taking non-adjusted points as reference
+        updateProgress("Sub-Interpolation...")
+        cIndex = 0
+        for row in rows:
+            updateProgress("Verarbeite Punkt {0}/{1}...".format(cIndex, rowCount))
+
+            if row[zIndex] == 0:
+                cIndex += 1
+                continue
+
+            toStartLength = pointInfo[cIndex][0]
+            baseLength = pointInfo[cIndex][1]
+            difToOriginal = pointInfo[cIndex][2]
+            lineID = pointInfo[cIndex][3]
+            originalZ = pointInfo[cIndex][4]
+
+            # Find previous and next non-adjusted point within line
+            sIndex = cIndex
+            while sIndex > 0 and lineID == pointInfo[sIndex][3] and pointInfo[sIndex][2] != 0:
+                sIndex -= 1
+
+            eIndex = cIndex
+            while eIndex < len(pointInfo) and lineID == pointInfo[eIndex][3] and pointInfo[eIndex][2] != 0:
+                eIndex += 1
+
+            # Only sub-interpolate when points have been found
+            if sIndex != cIndex and eIndex != cIndex:
+                # Create new reference data
+                zDif = pointInfo[eIndex][4] - pointInfo[sIndex][4]
+                baseLength = pointInfo[eIndex][0] - pointInfo[sIndex][0]
+                toStartLength = pointInfo[cIndex][0] - pointInfo[sIndex][0]
+                if toStartLength > 0 and baseLength > 0:
+                    distanceFactor = toStartLength / baseLength
+                    newZ = pointInfo[sIndex][4] - (distanceFactor * zDif)  # Calculate new Z coord based on distance to start point
+                    difToOriginal = newZ - (pointInfo[cIndex][4] + row[zIndex])
+                    row[zIndex] += difToOriginal
+                    adjustedPoints += 1
+
+            cIndex += 1
 
     updateProgress("Schreibe interpolierte Punkte in Feature...")
     rIndex = 0
@@ -404,6 +457,7 @@ with Timer("Setup") as timer:
     schacht_path = arcpy.GetParameterAsText(2)
     output_path = arcpy.GetParameterAsText(3)
     showWarnings = arcpy.GetParameter(4)
+    subInterpolate = arcpy.GetParameter(5)
 
     # Change workspace to output folder
     os.chdir(output_path)
@@ -427,10 +481,10 @@ with Timer("Zu Punkte konvertieren") as timer:
             convertFeatureToPoints(featureClass)
 
 # Update base line vertices Z values
-with Timer("3D Daten anpassen (Teil 1)") as timer:
+with Timer("3D Daten anpassen (Haltungen)") as timer:
     interpolateFeatureZ("haltungen_out_toPoints", "ORIG_FID", schacht_out, "schacht_X", "schacht_Y", "schacht_XY")
     recalculate3DPointCoordinates("haltungen_out_toPoints")
-with Timer("3D Daten anpassen (Teil 2)") as timer:
+with Timer("3D Daten anpassen (Anschlussdaten)") as timer:
     adjust3DZbyReference("anschluss_out_toPoints", "a_XY", "ORIG_FID", "haltungen_out_toPoints", "h_XY")
     # recalculate3DPointCoordinates("anschluss_out_toPoints")
 
