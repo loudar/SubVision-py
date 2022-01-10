@@ -384,6 +384,7 @@ def adjust3DZbyReference(featureA, matchA, groupA, featureB, matchB):
     cIndex = 0
     adjustedPoints = 0
     processGroups = True # Should create a 2D plane of points per line
+    xyTolerance = .003 # in meters
 
     updateProgress("Suche nach übereinstimmenden IDs von {0}...".format(featureA))
     OArows = copy.deepcopy(Arows) # Fastest method to deepcopy array according to https://stackoverflow.com/a/2612990/13756552
@@ -395,24 +396,61 @@ def adjust3DZbyReference(featureA, matchA, groupA, featureB, matchB):
         updateProgress("Verarbeite Punkt {0}/{1}...".format(cIndex, ArowCount))
 
         # Only search for match if point isn't adjusted already
-        if Arow[AzIndex] == 0:
-            # Search for matching reference points
-            searchID = Arow[AmatchIndex]
-            for Brow in Brows:
-                if searchID == Brow[BmatchIndex]:
-                    # Copy the adjustment (NOT the absolute) Z value
-                    Arow[AzIndex] = Brow[BzIndex] - OArows[cIndex][AzIndex]
-                    adjustedPoints += 1
-                    rIndex = 0
-                    for Arow2 in Arows:
-                        if Arows[rIndex][AgroupIndex] == Arow[AgroupIndex] and not rIndex == cIndex:
-                            adjustedPoints += 1
-                            Arows[rIndex][AzIndex] = Brow[BzIndex] - OArows[rIndex][AzIndex]
+        #if Arow[AzIndex] == 0:
+        # Search for matching reference points
+        searchID = Arow[AmatchIndex]
+        adjusted = False
+        for Brow in Brows:
+            if searchID == Brow[BmatchIndex]:
+                # Copy the adjustment (NOT the absolute) Z value
+                Arow[AzIndex] = Brow[BzIndex] - OArows[cIndex][AzIndex]
+                adjustedPoints += 1
+                adjusted = True
+                break
 
-                        rIndex += 1
+        if adjusted:
+            adjusted = False
+            # Find connected points, snap overlap in XY to base sewage
+            rIndex = 0
+            for Arow2 in Arows:
+                if Arow2[AgroupIndex] == Arow[AgroupIndex] and not rIndex == cIndex:
+                    if (Arow2[AmatchIndex] > Arow[AmatchIndex] - xyTolerance) and (
+                            Arow2[AmatchIndex] < Arow[AmatchIndex] + xyTolerance):
+                        adjustedPoints += 1
+                        difToOriginal = (OArows[cIndex][AzIndex] + Arow[AzIndex]) - OArows[rIndex][AzIndex]
+                        Arow2[AzIndex] = difToOriginal
+                    else:
+                        adjustedPoints += 1
+                        difToOriginal = Brow[BzIndex] - OArows[rIndex][AzIndex]
+                        if difToOriginal <= .2: difToOriginal = 0
+                        Arow2[AzIndex] = difToOriginal
 
-                    break
+                    # Snap all secondary lines to connected primary by XY proximity
+                    sIndex = 0
+                    for Arow3 in Arows:
+                        if (not sIndex == rIndex) and (not sIndex == cIndex) and Arows[sIndex][AzIndex] == 0:
+                            if (Arow3[AmatchIndex] > Arow2[AmatchIndex] - xyTolerance) and (
+                                    Arow3[AmatchIndex] < Arow2[AmatchIndex] + xyTolerance):
+                                adjustedPoints += 1
+                                difToOriginal = (OArows[rIndex][AzIndex] + Arow2[AzIndex]) - OArows[sIndex][
+                                    AzIndex]
+                                if difToOriginal <= .2: difToOriginal = 0
+                                Arow3[AzIndex] = difToOriginal
+                                # Find points of same group for secondary lines
+                                fIndex = 0
+                                for Arow4 in Arows:
+                                    if Arow4[AgroupIndex] == Arow3[AgroupIndex] and not fIndex == sIndex and not fIndex == cIndex and not fIndex == rIndex:
+                                        adjustedPoints += 1
+                                        difToOriginal = (OArows[sIndex][AzIndex] + Arow3[AzIndex]) - \
+                                                        OArows[fIndex][AzIndex]
+                                        if difToOriginal <= .2: difToOriginal = 0
+                                        Arow4[AzIndex] = difToOriginal
 
+                                    fIndex += 1
+
+                        sIndex += 1
+
+                rIndex += 1
         cIndex += 1
 
     updateProgress("Schreibe {0} angepasste Punkte in Feature {1}...".format(adjustedPoints, featureA))
@@ -421,7 +459,9 @@ def adjust3DZbyReference(featureA, matchA, groupA, featureB, matchB):
         None, "ORDER BY {0}, {1} DESC".format(groupA, "FID"))) as Aupdate:
         for AupRow in Aupdate:
             if Arows[rIndex][AzIndex] == 0:
-                Aupdate.deleteRow()
+                # Aupdate.deleteRow()
+                AupRow[AzIndex] = Arows[rIndex][AzIndex]
+                Aupdate.updateRow(AupRow)
             else:
                 AupRow[AzIndex] = Arows[rIndex][AzIndex]
                 Aupdate.updateRow(AupRow)
